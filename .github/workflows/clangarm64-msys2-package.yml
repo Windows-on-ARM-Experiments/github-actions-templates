@@ -1,0 +1,103 @@
+name: Build MSYS2 package with CLANGARM64
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "Package name to build"
+        type: string
+        default: "mingw-w64-zlib"
+      packages_repository:
+        description: "MSYS2 packages repository to build from"
+        type: string
+        default: "msys2/MINGW-packages"
+      packages_branch:
+        description: "MSYS2 packages branch to build from"
+        type: string
+        default: "master"
+      dependencies:
+        description: "Install additional dependencies"
+        type: string
+        default: ""
+
+env:
+  CLEAN_BUILD: 1
+
+jobs:
+  build:
+    name: Build ${{ inputs.package_name || 'mingw-w64-zlib' }}
+    timeout-minutes: 720
+    runs-on: windows-11-arm
+
+    defaults:
+     run:
+       shell: msys2 {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout ${{ inputs.packages_repository || 'msys2/MINGW-packages' }} repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.packages_repository || 'msys2/MINGW-packages' }}
+          ref: ${{ inputs.packages_branch || 'master' }}
+          sparse-checkout: ${{ inputs.package_name || 'mingw-w64-zlib' }}
+          path: ${{ github.workspace }}/packages
+
+      - uses: msys2/setup-msys2@v2
+        timeout-minutes: 10
+        with:
+          msystem: ${{ contains(inputs.packages_repository || 'msys2/MINGW-packages', 'MINGW') && 'CLANGARM64' || 'MSYS' }}
+          path-type: minimal
+          install: git base-devel
+          update: true
+          cache: true
+
+      - name: Install dependencies
+        run: >-
+          `cygpath "${{ github.workspace }}"`/.github/scripts/msys2/install-dependencies.sh \
+            "${{ inputs.dependencies }}"
+
+      - name: Enable Ccache
+        id: enable-ccache
+        run: |
+          `cygpath "${{ github.workspace }}"`/.github/scripts/msys2/enable-ccache.sh \
+            ${{ inputs.packages_repository || 'msys2/MINGW-packages' }}
+
+      - name: Restore Ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: ${{ inputs.package_name || 'mingw-w64-zlib' }}-ccache-${{ steps.enable-ccache.outputs.timestamp }}
+          restore-keys: ${{ inputs.package_name || 'mingw-w64-zlib' }}-
+
+      - name: Build ${{ inputs.package_name || 'mingw-w64-zlib' }}
+        timeout-minutes: 720
+        working-directory: ${{ github.workspace }}/packages/${{ inputs.package_name || 'mingw-w64-zlib' }}
+        run: |
+          `cygpath "${{ github.workspace }}"`/.github/scripts/msys2/build-package.sh \
+            ${{ inputs.packages_repository || 'msys2/MINGW-packages' }}
+
+      - name: Save Ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: ${{ inputs.package_name || 'mingw-w64-zlib' }}-ccache-${{ steps.enable-ccache.outputs.timestamp }}
+
+      - name: Upload ${{ inputs.package_name || 'mingw-w64-zlib' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package_name || 'mingw-w64-zlib' }}
+          retention-days: 3
+          path: ${{ github.workspace }}/packages/${{ inputs.package_name || 'mingw-w64-zlib' }}/*.pkg.tar.zst
+
+      - name: Upload build folder
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package_name || 'mingw-w64-zlib' }}-build
+          retention-days: 1
+          path: ${{ github.workspace }}/packages/${{ inputs.package_name || 'mingw-w64-zlib' }}/src
