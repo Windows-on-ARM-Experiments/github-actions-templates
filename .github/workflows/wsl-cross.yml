@@ -1,0 +1,46 @@
+name: Cross-build with WSL
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FOO: foo
+  BAR: C:\bar
+
+jobs:
+  cross-build:
+    runs-on: windows-11-arm
+
+    defaults:
+      run:
+        shell: wsl bash --noprofile --norc -euo pipefail "$(s="$(wslpath '{0}')" && sed -i 's/\r$//' "$s" && echo "$s")"
+
+    env:
+      WSLENV: FOO:BAR/p:GITHUB_ENV/p:GITHUB_OUTPUT/p:GITHUB_STEP_SUMMARY/p
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: ${{ github.workspace }}
+
+      - name: Install zstd
+        shell: powershell
+        run: |
+          .github/scripts/wsl/install-zstd.ps1
+
+      - name: Install WSL
+        shell: powershell
+        if: false
+        run: |
+          wsl --set-default-version 1
+          wsl --install --distribution Ubuntu-24.04 --no-launch
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/wsl/install-dependencies.sh
+
+      - name: Build
+        run: |
+          .github/scripts/wsl/build.sh $FOO $BAR
